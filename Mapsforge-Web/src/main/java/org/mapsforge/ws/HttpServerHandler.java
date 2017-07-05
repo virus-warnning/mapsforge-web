@@ -209,6 +209,9 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
 	}
     
     private ByteBuf getTile(String themeName, byte zoom, int tx, int ty) throws Exception {
+    		long begin = System.currentTimeMillis();
+
+    		String action;
     		RenderThemeFuture rtf = getRenderThemeFuture(themeName);
     		TileCache tileCache = getTileCache(themeName);
     		RendererJob theJob = createJob(MAPDS, rtf, zoom, tx, ty);
@@ -219,11 +222,10 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
     			TileBitmap tb = renderer.executeJob(theJob);
     			tileCache.put(theJob, tb);
     			
-    			// TODO: Use logger.
-    			System.out.printf("Draw tile %s/%d/%d/%d.\n", themeName, zoom, tx, ty);
+    			action = "Draw tile";
     		} else {
     			// TODO: Use logger.
-    			System.out.printf("Use cached tile %s/%d/%d/%d.\n", themeName, zoom, tx, ty);
+    			action = "Use cached tile";
     		}
 		
 		// Load tile as a Netty buffer.
@@ -231,6 +233,12 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
 		InputStream tile = new FileInputStream(TILE_PATH);
 		ByteBuf buffer = Unpooled.buffer();
 		buffer.writeBytes(tile, tile.available());
+		
+		double elapsed = (System.currentTimeMillis() - begin) / 1000.0;
+		
+		// TODO: Use logger.
+		System.out.printf("%s %s/%d/%d/%d. (%.3f seconds used)\n", action, themeName, zoom, tx, ty, elapsed);
+		
 		return buffer;
     }
     
