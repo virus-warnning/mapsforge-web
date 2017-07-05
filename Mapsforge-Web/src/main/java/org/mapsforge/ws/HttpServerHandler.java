@@ -39,6 +39,10 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.util.CharsetUtil;
 
+/**
+ * 
+ * @author Raymond Wu
+ */
 public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> {
 
 	// TX and TY range of a zoom level.
@@ -60,19 +64,23 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
 	private static final String HOME = System.getProperty("user.home");
 	private static final String SAVE_PATH = HOME + "/osm-data/tilecache";
 	private static final File MAP_PATH = new File(HOME + "/osm-data/taiwan-taco.map");
-	
 	private static final Pattern URI_PATTERN = Pattern.compile("^/([a-z]+)/(\\d+)/(\\d+)/(\\d+)$");
+	private static final int CACHE_CAPACITY = 32768;
+	private static final int TILE_SIZE = 256;
+	
+	// Renderer dependencies.
 	private static final GraphicFactory GRAPHIC_FACTORY = AwtGraphicFactory.INSTANCE;
-	private static final DisplayModel DISPLAY_MODEL = new FixedTileSizeDisplayModel(256);
+	private static final DisplayModel DISPLAY_MODEL = new FixedTileSizeDisplayModel(TILE_SIZE);
+	private static final MapFile MAPDS = new MapFile(MAP_PATH);
 	private static final HashMap<Byte, TileRange> TILE_RANGE_TABLE = new HashMap<>();
+	private static final HashMap<String, TileCache> TILE_CACHE_TABLE = new HashMap<>();
+	private static final HashMap<String, RenderThemeFuture> RENDER_THEME_FUTURE_TABLE = new HashMap<>();
 	
 	static {
-		MapFile mapData = new MapFile(MAP_PATH);
-		double lngMin = mapData.boundingBox().minLongitude;
-		double lngMax = mapData.boundingBox().maxLongitude;
-		double latMin = mapData.boundingBox().minLatitude;
-		double latMax = mapData.boundingBox().maxLatitude;		
-		mapData.close();
+		double lngMin = MAPDS.boundingBox().minLongitude;
+		double lngMax = MAPDS.boundingBox().maxLongitude;
+		double latMin = MAPDS.boundingBox().minLatitude;
+		double latMax = MAPDS.boundingBox().maxLatitude;	
 		
 		int txMin, txMax, tyMin, tyMax;
 		for (byte z=7; z<=18; z++) {
@@ -90,24 +98,23 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) throws Exception {
         if (msg instanceof HttpRequest) {
-        		// Response
         		ByteBuf tileContent = null;
         		StringBuilder errReason = new StringBuilder();
         		HttpResponseStatus httpResponseStatus = HttpResponseStatus.OK;
         		
-        		// Request
+        		// Request validation.
             HttpRequest httpRequest = (HttpRequest)msg;
 
             if (httpRequest.method().name().equals("GET")) {
             		// Pattern check & extract fields.
                 Matcher matcher = URI_PATTERN.matcher(httpRequest.uri());                
                 if (matcher.find()) {
-                		String theme = matcher.group(1);
+                		String themeName = matcher.group(1);
                 		byte zoom = Byte.valueOf(matcher.group(2));
                 		int tx = Integer.valueOf(matcher.group(3));
                 		int ty = Integer.valueOf(matcher.group(4));
                 		
-                		if (!(theme.equals("default") || theme.equals("classic"))) {
+                		if (!(themeName.equals("default") || themeName.equals("classic"))) {
                 			errReason.append("Theme field allows default or classic only.\n");
                 		}
                 		
@@ -135,7 +142,7 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
                 		
                 		if (errReason.length() == 0) {
                 			// 200
-                			tileContent = getTile(theme, zoom, tx, ty);
+                			tileContent = getTile(themeName, zoom, tx, ty);
                 		} else {
                 			// 406
                 			httpResponseStatus = HttpResponseStatus.NOT_ACCEPTABLE;
@@ -150,6 +157,8 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
             		errReason.append("GET method is allowed only.\n");
             		httpResponseStatus = HttpResponseStatus.METHOD_NOT_ALLOWED;
             }
+            
+            // Response tile or error message. 
             
             FullHttpResponse response;
             
@@ -169,49 +178,53 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
         }
     }
     
-    private TileCache getTileCache(String themeName) {
-		File cacheDir = new File(SAVE_PATH, themeName);
-		TileCache tileCache = new FileSystemTileCache(9999, cacheDir, GRAPHIC_FACTORY, false);
-    		return tileCache;
+    private synchronized TileCache getTileCache(String themeName) {
+    		if (TILE_CACHE_TABLE.containsKey(themeName)) {
+    			return TILE_CACHE_TABLE.get(themeName);
+    		} else {
+    			File cacheDir = new File(SAVE_PATH, themeName);
+    			TileCache tileCache = new FileSystemTileCache(CACHE_CAPACITY, cacheDir, GRAPHIC_FACTORY, false);
+    			TILE_CACHE_TABLE.put(themeName, tileCache);
+    	    		return tileCache;
+    		}
     }
     
-    private RendererJob createJob(MapDataStore mapData, RenderThemeFuture rtf, byte zoom, int tx, int ty) {
-    		Tile tile = new Tile(tx, ty, zoom, 256);
-		RendererJob theJob = new RendererJob(tile, mapData, rtf, DISPLAY_MODEL, 1.0f, false, false);
-		return theJob;
-    }
-    
-    private RenderThemeFuture getRenderThemeFuture(String themeName) throws FileNotFoundException {
-    		String themePath = String.format("res/themes/%s/theme.xml", themeName);
-		XmlRenderTheme theme = new ExternalRenderTheme(themePath);
-		return new RenderThemeFuture(GRAPHIC_FACTORY, theme, DISPLAY_MODEL);
+    private synchronized RenderThemeFuture getRenderThemeFuture(String themeName) throws FileNotFoundException {
+    		if (RENDER_THEME_FUTURE_TABLE.containsKey(themeName)) {
+    			return RENDER_THEME_FUTURE_TABLE.get(themeName);
+    		} else {
+    			String themePath = String.format("res/themes/%s/theme.xml", themeName);
+    			XmlRenderTheme theme = new ExternalRenderTheme(themePath);
+    			RenderThemeFuture rtf = new RenderThemeFuture(GRAPHIC_FACTORY, theme, DISPLAY_MODEL);
+    			RENDER_THEME_FUTURE_TABLE.put(themeName, rtf);
+    			new Thread(rtf).start();
+    			return rtf;
+    		}
     };
     
+    private RendererJob createJob(MapDataStore mapData, RenderThemeFuture rtf, byte zoom, int tx, int ty) {
+		Tile tile = new Tile(tx, ty, zoom, TILE_SIZE);
+		RendererJob theJob = new RendererJob(tile, mapData, rtf, DISPLAY_MODEL, 1.0f, false, false);
+		return theJob;
+	}
+    
     private ByteBuf getTile(String themeName, byte zoom, int tx, int ty) throws Exception {
-    		// TODO: Logging
-		// System.out.format("要求圖磚: theme=%s, tx=%d, ty=%d, zoom=%d\n", "undefined", tx, ty, zoom);
     		RenderThemeFuture rtf = getRenderThemeFuture(themeName);
-    		MapDataStore mapData = new MapFile(MAP_PATH);
     		TileCache tileCache = getTileCache(themeName);
-    		RendererJob theJob = createJob(mapData, rtf, zoom, tx, ty);
+    		RendererJob theJob = createJob(MAPDS, rtf, zoom, tx, ty);
     		
     		if (!tileCache.containsKey(theJob)) {
-    			// Draw tile and save as PNG.
-    			Thread t = new Thread(rtf);
-    			t.start();
-    			
     			TileBasedLabelStore tileBasedLabelStore = new TileBasedLabelStore(tileCache.getCapacityFirstLevel());
-    			DatabaseRenderer renderer = new DatabaseRenderer(mapData, GRAPHIC_FACTORY, tileCache, tileBasedLabelStore, true, true, null);
-    			TileBitmap tb = renderer.executeJob(theJob); // block
+    			DatabaseRenderer renderer = new DatabaseRenderer(MAPDS, GRAPHIC_FACTORY, tileCache, tileBasedLabelStore, true, true, null);
+    			TileBitmap tb = renderer.executeJob(theJob);
     			tileCache.put(theJob, tb);
     			
-    			System.out.printf("Draw tile %d/%d/%d.", zoom, tx, ty);
+    			// TODO: Use logger.
+    			System.out.printf("Draw tile %s/%d/%d/%d.\n", themeName, zoom, tx, ty);
     		} else {
-    			System.out.println("Use cached tile.");
+    			// TODO: Use logger.
+    			System.out.printf("Use cached tile %s/%d/%d/%d.\n", themeName, zoom, tx, ty);
     		}
-    		
-		// Close map.
-		mapData.close();
 		
 		// Load tile as a Netty buffer.
 		String TILE_PATH = String.format("%s/%s/%d/%d/%d.tile", SAVE_PATH, themeName, zoom, tx, ty);

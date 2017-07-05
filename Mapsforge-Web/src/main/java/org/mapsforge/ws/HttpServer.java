@@ -10,6 +10,10 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpServerCodec;
 
+/**
+ * 
+ * @author Raymond Wu
+ */
 public class HttpServer extends ChannelInitializer<SocketChannel> {
 
 	private static final int PORT = 20480;
