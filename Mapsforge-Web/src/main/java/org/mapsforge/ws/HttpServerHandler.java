@@ -4,12 +4,14 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
+import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.mapsforge.core.graphics.GraphicFactory;
 import org.mapsforge.core.graphics.TileBitmap;
 import org.mapsforge.core.model.Tile;
+import org.mapsforge.core.util.MercatorProjection;
 import org.mapsforge.map.awt.graphics.AwtGraphicFactory;
 import org.mapsforge.map.datastore.MapDataStore;
 import org.mapsforge.map.layer.cache.FileSystemTileCache;
@@ -39,51 +41,131 @@ import io.netty.util.CharsetUtil;
 
 public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> {
 
-	private static final Pattern PATTERN = Pattern.compile("^/([a-z]+)/(\\d+)/(\\d+)/(\\d+)$");
+	// TX and TY range of a zoom level.
+	static class TileRange {
+		public int txMin;
+		public int txMax;
+		public int tyMin;
+		public int tyMax;
+		
+		public TileRange(int txMin, int txMax, int tyMin, int tyMax) {
+			this.txMin = txMin;
+			this.txMax = txMax;
+			this.tyMin = tyMin;
+			this.tyMax = tyMax;
+		}
+	}
 	
 	// Your compiled map.
 	private static final String HOME = System.getProperty("user.home");
-	private static final String SAVE_PATH = HOME + "/Documents/MyTiles";
+	private static final String SAVE_PATH = HOME + "/osm-data/tilecache";
 	private static final File MAP_PATH = new File(HOME + "/osm-data/taiwan-taco.map");
 	
+	private static final Pattern URI_PATTERN = Pattern.compile("^/([a-z]+)/(\\d+)/(\\d+)/(\\d+)$");
 	private static final GraphicFactory GRAPHIC_FACTORY = AwtGraphicFactory.INSTANCE;
 	private static final DisplayModel DISPLAY_MODEL = new FixedTileSizeDisplayModel(256);
+	private static final HashMap<Byte, TileRange> TILE_RANGE_TABLE = new HashMap<>();
 	
+	static {
+		MapFile mapData = new MapFile(MAP_PATH);
+		double lngMin = mapData.boundingBox().minLongitude;
+		double lngMax = mapData.boundingBox().maxLongitude;
+		double latMin = mapData.boundingBox().minLatitude;
+		double latMax = mapData.boundingBox().maxLatitude;		
+		mapData.close();
+		
+		int txMin, txMax, tyMin, tyMax;
+		for (byte z=7; z<=18; z++) {
+			txMin = MercatorProjection.longitudeToTileX(lngMin, z);
+			txMax = MercatorProjection.longitudeToTileX(lngMax, z);
+			tyMin = MercatorProjection.latitudeToTileY(latMax, z);
+			tyMax = MercatorProjection.latitudeToTileY(latMin, z);
+			TILE_RANGE_TABLE.put(z, new TileRange(txMin, txMax, tyMin, tyMax));
+		}
+	}
+	
+	/**
+	 * http://localhost:20480/classic/16/54898/28048
+	 */
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) throws Exception {
         if (msg instanceof HttpRequest) {
+        		// Response
+        		ByteBuf tileContent = null;
+        		StringBuilder errReason = new StringBuilder();
+        		HttpResponseStatus httpResponseStatus = HttpResponseStatus.OK;
+        		
+        		// Request
             HttpRequest httpRequest = (HttpRequest)msg;
-            
 
             if (httpRequest.method().name().equals("GET")) {
-                String uri = httpRequest.uri();
-                Matcher matcher = PATTERN.matcher(uri);
-                
+            		// Pattern check & extract fields.
+                Matcher matcher = URI_PATTERN.matcher(httpRequest.uri());                
                 if (matcher.find()) {
-                		// http://localhost:20480/classic/16/54898/28048
                 		String theme = matcher.group(1);
                 		byte zoom = Byte.valueOf(matcher.group(2));
                 		int tx = Integer.valueOf(matcher.group(3));
                 		int ty = Integer.valueOf(matcher.group(4));
-                		System.out.format("要求圖磚: theme=%s, tx=%d, ty=%d, zoom=%d\n", "undefined", tx, ty, zoom);
-                		ByteBuf content = getTile(theme, zoom, tx, ty);
                 		
-                		FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
-                		response.headers().set(HttpHeaderNames.CONTENT_TYPE, "image/png");
-                    response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
-                    ctx.writeAndFlush(response);
-                    ctx.channel().close();
+                		if (!(theme.equals("default") || theme.equals("classic"))) {
+                			errReason.append("Theme field allows default or classic only.\n");
+                		}
+                		
+                		if (zoom < 7 || zoom > 18) {
+                			errReason.append("Zoom field must be between 7~18.\n");
+                		} else {
+                			TileRange tileRange = TILE_RANGE_TABLE.get(zoom);
+                			
+                			if (tx < tileRange.txMin || tx > tileRange.txMax) {
+                				String hint = String.format(
+            						"TILE_X in zoom level %d must be between %d~%d.",
+            						zoom, tileRange.txMin, tileRange.txMax
+            					);
+                				errReason.append(hint);
+                			}
+                			
+                			if (ty < tileRange.tyMin || ty > tileRange.tyMax) {
+                				String hint = String.format(
+            						"TILE_Y in zoom level %d must be between %d~%d.",
+            						zoom, tileRange.tyMin, tileRange.tyMax
+            					);
+                				errReason.append(hint);
+                			}
+                		}
+                		
+                		if (errReason.length() == 0) {
+                			// 200
+                			tileContent = getTile(theme, zoom, tx, ty);
+                		} else {
+                			// 406
+                			httpResponseStatus = HttpResponseStatus.NOT_ACCEPTABLE;
+                		}
                 } else {
-                		StringBuilder responseContent = new StringBuilder("URL 格式錯誤");
-                		ByteBuf content = Unpooled.copiedBuffer(responseContent, CharsetUtil.UTF_8);
-                		
-                		FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.BAD_REQUEST, content);
-                		response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
-                    response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
-                    ctx.writeAndFlush(response);
-                    ctx.channel().close();
+                		// 400
+                		errReason.append("URI must be in this format /{THEME}/{ZOOM}/{TILE_X}/{TILE_Y}.\n");
+                		httpResponseStatus = HttpResponseStatus.BAD_REQUEST;
                 }
+            } else {
+            		// 405
+            		errReason.append("GET method is allowed only.\n");
+            		httpResponseStatus = HttpResponseStatus.METHOD_NOT_ALLOWED;
             }
+            
+            FullHttpResponse response;
+            
+            if (tileContent != null) {
+	    			response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, tileContent);
+	        		response.headers().set(HttpHeaderNames.CONTENT_TYPE, "image/png");
+	            response.headers().set(HttpHeaderNames.CONTENT_LENGTH, tileContent.readableBytes());
+            } else {
+            		ByteBuf msgContent = Unpooled.copiedBuffer(errReason, CharsetUtil.UTF_8);
+            		response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, msgContent);
+            		response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
+            		response.headers().set(HttpHeaderNames.CONTENT_LENGTH, msgContent.readableBytes());
+            }
+            
+            ctx.writeAndFlush(response);
+            ctx.channel().close();
         }
     }
     
@@ -106,6 +188,8 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
     };
     
     private ByteBuf getTile(String themeName, byte zoom, int tx, int ty) throws Exception {
+    		// TODO: Logging
+		// System.out.format("要求圖磚: theme=%s, tx=%d, ty=%d, zoom=%d\n", "undefined", tx, ty, zoom);
     		RenderThemeFuture rtf = getRenderThemeFuture(themeName);
     		MapDataStore mapData = new MapFile(MAP_PATH);
     		TileCache tileCache = getTileCache(themeName);
