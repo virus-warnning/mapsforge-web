@@ -26,6 +26,8 @@ RUN cd ~ \
   && rm -rf mapsforge-web-master master.zip
 
 EXPOSE 20480
+WORKDIR /root/Mapsforge-Web
+CMD ["./gradlew", "start"]
 ```
 
 ```
