@@ -1,5 +1,7 @@
 package org.mapsforge.ws;
 
+import java.net.InetSocketAddress;
+
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
@@ -27,7 +29,9 @@ public class HttpServer extends ChannelInitializer<SocketChannel> {
             serverBootstrap.group(bossGroup,workerGroup)
             		.channel(NioServerSocketChannel.class)
             		.childHandler(new HttpServer());
-            ChannelFuture channelFuture = serverBootstrap.bind(PORT).sync();
+            ChannelFuture channelFuture = serverBootstrap
+            		.bind(new InetSocketAddress("0.0.0.0", PORT))
+            		.sync();
             channelFuture.channel().closeFuture().sync();
         } finally {
             bossGroup.shutdownGracefully();
