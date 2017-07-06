@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.commons.io.IOUtils;
 import org.mapsforge.core.graphics.GraphicFactory;
 import org.mapsforge.core.graphics.TileBitmap;
 import org.mapsforge.core.model.Tile;
@@ -99,6 +100,7 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
     protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) throws Exception {
         if (msg instanceof HttpRequest) {
         		ByteBuf tileContent = null;
+        		ByteBuf htmlContent = null;
         		StringBuilder errReason = new StringBuilder();
         		HttpResponseStatus httpResponseStatus = HttpResponseStatus.OK;
         		
@@ -148,9 +150,17 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
                 			httpResponseStatus = HttpResponseStatus.NOT_ACCEPTABLE;
                 		}
                 } else {
-                		// 400
-                		errReason.append("URI must be in this format /{THEME}/{ZOOM}/{TILE_X}/{TILE_Y}.\n");
-                		httpResponseStatus = HttpResponseStatus.BAD_REQUEST;
+                		if (httpRequest.uri().equals("/")) {
+                			// 200
+                			File htmlFile = new File("res/preview.html");
+                			byte[] htmlData = new byte[(int)htmlFile.length()];
+                			IOUtils.readFully(new FileInputStream(htmlFile), htmlData);
+                			htmlContent = Unpooled.copiedBuffer(htmlData);
+                		} else {
+                			// 400
+                    		errReason.append("URI must be in this format /{THEME}/{ZOOM}/{TILE_X}/{TILE_Y}.\n");
+                    		httpResponseStatus = HttpResponseStatus.BAD_REQUEST;	
+                		}
                 }
             } else {
             		// 405
@@ -162,10 +172,16 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
             
             FullHttpResponse response;
             
-            if (tileContent != null) {
-	    			response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, tileContent);
-	        		response.headers().set(HttpHeaderNames.CONTENT_TYPE, "image/png");
-	            response.headers().set(HttpHeaderNames.CONTENT_LENGTH, tileContent.readableBytes());
+            if (tileContent != null || htmlContent != null) {
+            		ByteBuf content = tileContent;
+            		String ctype = "image/png";
+            		if (tileContent == null) {
+            			content = htmlContent;
+            			ctype = "text/html; charset=UTF-8";
+            		}
+	    			response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, content);
+	        		response.headers().set(HttpHeaderNames.CONTENT_TYPE, ctype);
+	            response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
             } else {
             		ByteBuf msgContent = Unpooled.copiedBuffer(errReason, CharsetUtil.UTF_8);
             		response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, msgContent);
@@ -217,14 +233,12 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
     		RendererJob theJob = createJob(MAPDS, rtf, zoom, tx, ty);
     		
     		if (!tileCache.containsKey(theJob)) {
+    			action = "Draw tile";
     			TileBasedLabelStore tileBasedLabelStore = new TileBasedLabelStore(tileCache.getCapacityFirstLevel());
     			DatabaseRenderer renderer = new DatabaseRenderer(MAPDS, GRAPHIC_FACTORY, tileCache, tileBasedLabelStore, true, true, null);
     			TileBitmap tb = renderer.executeJob(theJob);
     			tileCache.put(theJob, tb);
-    			
-    			action = "Draw tile";
     		} else {
-    			// TODO: Use logger.
     			action = "Use cached tile";
     		}
 		

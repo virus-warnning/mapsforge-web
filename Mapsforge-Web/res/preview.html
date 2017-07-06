@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<head>
+<meta charset="utf-8" />
+<title>鬼島圖磚</title>
+<meta property="og:image" content="/default/16/54894/28049.png" />
+<meta name="og:description" content="這是針對鬼島設計的 OSM 非官方圖磚" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.3/leaflet.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.3/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+<script>
+var map;
+var layer = null;
+
+$(document).ready(function() {
+	// 配置地圖
+	var BBOX   = L.latLngBounds([21.5, 118.5], [25.5, 123.5]);
+	var center = JSON.parse(localStorage["map_center"]||"[25.078, 121.542]");
+	var zoom   = JSON.parse(localStorage["map_zoom"]||"16");
+	map = L.map('map').setView(center, zoom);
+	map.setMaxBounds(BBOX);
+
+	// 變更圖磚設計
+	map.changeLayer = function() {
+		var style = $("#tile_style").val();
+		localStorage["tile_style"] = style;
+		if (layer!=null) {
+			map.removeLayer(layer);
+		}
+
+		var TILE_ATTR = '資料來源 &copy; <a href="http://openstreetmap.org">OSM</a> ' +
+			'圖客們, 授權 <a href="http://creativecommons.org/licenses/by-sa/2.0/tw/">CC-BY 2.0</a>, ' +
+			'圖磚 &copy; <a href="https://github.com/OsmHackTW">OSMTW 歹丸開放街圖</a>';
+		var tile_url  = '/{style}/{z}/{x}/{y}';
+		layer = L.tileLayer(tile_url, {style: $(this).val(), attribution: TILE_ATTR, minZoom: 7, maxZoom: 18});
+		map.addLayer(layer);
+	};
+
+	// 地圖操作狀態同步到介面上
+	map.syncInfo = function(e) {
+		var FIXED = 5; // 取小數點下幾位？
+		var z = this.getZoom();
+		var c = this.getCenter();
+		var lat = c.lat.toFixed(FIXED);
+		var lng = c.lng.toFixed(FIXED);
+		var msg = lng + ", " + lat;
+		$("#location").val(msg);
+		$("#zoom").val(z);
+		localStorage["map_zoom"] = JSON.stringify(z);
+		localStorage["map_center"] = JSON.stringify([lat,lng]);
+	};
+
+	var style = localStorage["tile_style"]||"default";
+	$("#tile_style > option[value="+style+"]").attr("selected", "selected");
+	$("#tile_style").on("change", map.changeLayer);
+	$("#tile_style").trigger("change");
+	
+	// 地圖的移動與縮放處理
+	map.on('moveend', map.syncInfo);
+	map.on('zoomend', map.syncInfo);
+	map.fire('moveend');
+	map.fire('zoomend');
+
+	// 座標點一下就全選，方便複製用
+	$("#location").on('click', function(e) {
+		this.setSelectionRange(0, this.value.length);
+	});
+});
+</script>
+<style type="text/css">
+body { margin: 0; overflow: hidden; }
+
+#map_suite {
+  position: absolute;
+  top: 25px;
+  bottom: 0;
+  width: 100%;
+}
+
+#map { width: 100%; height: 100%; }
+
+#banner {
+	position: absolute;
+	top: 0;
+	width: 100%;
+	height: 25px;
+	background: linear-gradient(to bottom, rgb(160, 80, 0) 0%, rgb(80, 40, 0) 100%);
+	color: #fff;
+	font-size: 10pt;
+}
+
+#banner > div { float: left; margin: 3px 0 0 0; }
+#banner > div.label { line-height: 15pt; margin: 3px 10px 0 20px; }
+
+#logo { 
+  width: 100px;
+  line-height: 15pt;
+  text-align: center;
+  border: 0px solid rgb(80, 40, 0);
+  border-right-width: 1px;
+}
+
+#location { width: 150px; }
+#zoom { width: 30px; }
+
+#location, #zoom {
+  height: 12px;
+  font-size: 8pt;
+  color: #555;
+}
+
+#tile_style {
+  height: 18px;
+  font-size: 8pt;
+  color: #555;
+}
+</style>
+</head>
+
+<body>
+<div id="map_suite">
+  <div id="map"></div>
+</div>
+<div id="banner">
+  <div id="logo">鬼島圖磚</div>
+  <div class="label">位置</div>
+  <div><input id="location"></div>
+  <div class="label">縮放</div>
+  <div><input id="zoom"></div>
+  <div class="label">圖磚設計</div>
+  <div>
+    <select id="tile_style">
+      <option value="default">預設</option>
+      <option value="classic">假掰文青風</option>
+    </select>
+  </div>
+</div>
+</body>
+
+</html>
