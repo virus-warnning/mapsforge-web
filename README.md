@@ -23,7 +23,9 @@ RUN cd ~ \
   && wget https://github.com/virus-warnning/mapsforge-web/archive/master.zip \
   && unzip master.zip \
   && mv mapsforge-web-master/Mapsforge-Web . \
-  && rm -rf mapsforge-web-master master.zip
+  && rm -rf mapsforge-web-master master.zip \
+  && cd Mapsforge-Web \
+  && ./gradlew compileJava
 
 EXPOSE 20480
 WORKDIR /root/Mapsforge-Web
@@ -32,4 +34,6 @@ CMD ["./gradlew", "start"]
 
 ```
 sudo docker build -t gdtile:2.0 .
+sudo docker run --name gdtile2 -it gdtile:2.0
+sudo docker start -i gdtile2
 ```
