@@ -1,5 +1,7 @@
 # mapsforge-web
-A tile server powered by Mapsforge and Netty.
+A tile server powered by Mapsforge and Netty. See [GDTile](http://gdtile.tacosync.com)
+
+以 Mapsforge 和 Netty 搭建的圖磚服務，參見 [鬼島圖磚](http://gdtile.tacosync.com)
 
 # Dockerfile
 ```Dockerfile
