@@ -7,16 +7,16 @@ FROM ubuntu:16.04
 MAINTAINER Raymond Wu "virus.warnning@gmail.com"
 
 RUN apt-get update
-RUN apt-get install -y wget
-RUN apt-get install -y unzip
-RUN apt-get install -y openjdk-8-jdk
+RUN apt-get install -y wget unzip openjdk-8-jdk
+
+# Font you'd like to use
+RUN apt-get install -y fonts-wqy-microhei
 
 # Download map file.
 RUN mkdir ~/osm-data \
   && cd ~/osm-data \
   && wget https://mirror.ossplanet.net/geomancer/0.1.0/taiwan-taco.map.gz \
-  && gunzip taiwan-taco.map.gz \
-  && rm -f taiwan-taco.map.gz
+  && gunzip taiwan-taco.map.gz
 
 # Download server.
 RUN cd ~ \
