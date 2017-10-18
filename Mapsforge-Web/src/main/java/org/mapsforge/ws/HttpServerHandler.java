@@ -4,7 +4,11 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.Locale;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,7 +48,7 @@ import io.netty.util.CharsetUtil;
  * 
  * @author Raymond Wu
  */
-public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> {
+public class HttpServerHandler extends SimpleChannelInboundHandler<HttpObject> {
 
 	// TX and TY range of a zoom level.
 	static class TileRange {
@@ -64,6 +68,7 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
 	// Your compiled map.
 	private static final String HOME = System.getProperty("user.home");
 	private static final String SAVE_PATH = HOME + "/osm-data/tilecache";
+	private static final String RFC822_ZERO_DATETIME = "Thu, 1 Jan 1970 00:00:00 UTC";
 	private static final File MAP_PATH = new File(HOME + "/osm-data/taiwan-taco.map");
 	private static final Pattern URI_PATTERN = Pattern.compile("^/([a-z]+)/(\\d+)/(\\d+)/(\\d+)$");
 	private static final int CACHE_CAPACITY = 32768;
@@ -104,6 +109,10 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
         		StringBuilder errReason = new StringBuilder();
         		HttpResponseStatus httpResponseStatus = HttpResponseStatus.OK;
         		
+        		SimpleDateFormat rfc822DateFormat = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss z", Locale.US);
+        		rfc822DateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
+        		String lastModified = rfc822DateFormat.format(new Date());
+        		
         		// Request validation.
             HttpRequest httpRequest = (HttpRequest)msg;
 
@@ -143,8 +152,20 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
                 		}
                 		
                 		if (errReason.length() == 0) {
-                			// 200
-                			tileContent = getTile(themeName, zoom, tx, ty);
+                			// HTTP Cache Control
+                			String ims = httpRequest.headers().get("IF-MODIFIED-SINCE", RFC822_ZERO_DATETIME);
+                			long tClient = rfc822DateFormat.parse(ims).getTime();
+                			long tServer = getTileTime(themeName, zoom, tx, ty);
+
+                			if (tServer > tClient) {
+                				// 200 (modified or not existed)
+                				tileContent = getTile(themeName, zoom, tx, ty);
+                				tServer = getTileTime(themeName, zoom, tx, ty);
+                				lastModified = rfc822DateFormat.format(tServer);
+                			} else {
+                				// 304
+                				httpResponseStatus = HttpResponseStatus.NOT_MODIFIED;
+                			}
                 		} else {
                 			// 406
                 			httpResponseStatus = HttpResponseStatus.NOT_ACCEPTABLE;
@@ -156,6 +177,7 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
                 			byte[] htmlData = new byte[(int)htmlFile.length()];
                 			IOUtils.readFully(new FileInputStream(htmlFile), htmlData);
                 			htmlContent = Unpooled.copiedBuffer(htmlData);
+                			lastModified = rfc822DateFormat.format(htmlFile.lastModified());
                 		} else {
                 			// 400
                     		errReason.append("URI must be in this format /{THEME}/{ZOOM}/{TILE_X}/{TILE_Y}.\n");
@@ -169,7 +191,6 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
             }
             
             // Response tile or error message. 
-            
             FullHttpResponse response;
             
             if (tileContent != null || htmlContent != null) {
@@ -182,6 +203,7 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
 	    			response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, content);
 	        		response.headers().set(HttpHeaderNames.CONTENT_TYPE, ctype);
 	            response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+	            response.headers().set(HttpHeaderNames.LAST_MODIFIED, lastModified);
             } else {
             		ByteBuf msgContent = Unpooled.copiedBuffer(errReason, CharsetUtil.UTF_8);
             		response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, httpResponseStatus, msgContent);
@@ -243,8 +265,8 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
     		}
 		
 		// Load tile as a Netty buffer.
-		String TILE_PATH = String.format("%s/%s/%d/%d/%d.tile", SAVE_PATH, themeName, zoom, tx, ty);
-		InputStream tile = new FileInputStream(TILE_PATH);
+		String tilePath = String.format("%s/%s/%d/%d/%d.tile", SAVE_PATH, themeName, zoom, tx, ty);
+		InputStream tile = new FileInputStream(tilePath);
 		ByteBuf buffer = Unpooled.buffer();
 		buffer.writeBytes(tile, tile.available());
 		
@@ -254,6 +276,18 @@ public class HttpServerHandler  extends SimpleChannelInboundHandler<HttpObject> 
 		System.out.printf("%s %s/%d/%d/%d. (%.3f seconds used)\n", action, themeName, zoom, tx, ty, elapsed);
 		
 		return buffer;
+    }
+    
+    private long getTileTime(String themeName, byte zoom, int tx, int ty) {
+    		long t = Long.MAX_VALUE;
+
+    		String tilePath = String.format("%s/%s/%d/%d/%d.tile", SAVE_PATH, themeName, zoom, tx, ty);
+    		File f = new File(tilePath);
+    		if (f.exists()) {
+    			t = f.lastModified();
+    		}
+
+    		return t;
     }
     
 }
