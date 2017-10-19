@@ -4,12 +4,13 @@
 <title>鬼島圖磚</title>
 <meta property="og:image" content="/default/16/54894/28049.png" />
 <meta name="og:description" content="這是針對鬼島設計的 OSM 非官方圖磚" />
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.3/leaflet.css" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.3/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.0.1/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.0.1/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
 <script>
 var map;
-var layer = null;
+var tileLayer = null;
+var gridLayer = null;
 
 $(document).ready(function() {
 	// 配置地圖
@@ -18,21 +19,55 @@ $(document).ready(function() {
 	var zoom   = JSON.parse(localStorage["map_zoom"]||"16");
 	map = L.map('map').setView(center, zoom);
 	map.setMaxBounds(BBOX);
+	
+	var MyGridLayer = L.GridLayer.extend({
+	    createTile: function(coords) {
+	        var cv = L.DomUtil.create('canvas', 'leaflet-tile');
+	        var ctx = cv.getContext('2d');
+	        var size = this.getTileSize();
+	        cv.width = size.x;
+	        cv.height = size.y;
+	        
+	        // 畫外框
+	        ctx.strokeStyle = 'rgb(255,0,0)';
+	        ctx.beginPath();
+	        ctx.moveTo(0,256);
+	        ctx.lineTo(0,0);
+	        ctx.lineTo(256,0);
+	        ctx.stroke();
+	        
+	        // 標示 Tile 編號
+	        var tag = "({X}, {Y}) zoom={Z}"
+	        		.replace("{X}", coords.x)
+	        		.replace("{Y}", coords.y)
+	        		.replace("{Z}", coords.z);
+	        ctx.fillStyle = 'rgb(255,0,0)';
+	        ctx.fillText(tag, 10, 20);
+
+	        return cv;
+	    }
+	});
 
 	// 變更圖磚設計
 	map.changeLayer = function() {
 		var style = $("#tile_style").val();
 		localStorage["tile_style"] = style;
-		if (layer!=null) {
-			map.removeLayer(layer);
+		if (tileLayer!=null) {
+			map.removeLayer(tileLayer);
+		}
+		if (gridLayer!=null) {
+			map.removeLayer(gridLayer);
 		}
 
 		var TILE_ATTR = '資料來源 &copy; <a href="http://openstreetmap.org">OSM</a> ' +
 			'圖客們, 授權 <a href="http://creativecommons.org/licenses/by-sa/2.0/tw/">CC-BY 2.0</a>, ' +
 			'圖磚 &copy; <a href="https://github.com/OsmHackTW">OSMTW 歹丸開放街圖</a>';
 		var tile_url  = '/{style}/{z}/{x}/{y}';
-		layer = L.tileLayer(tile_url, {style: $(this).val(), attribution: TILE_ATTR, minZoom: 7, maxZoom: 18});
-		map.addLayer(layer);
+		tileLayer = L.tileLayer(tile_url, {style: $(this).val(), attribution: TILE_ATTR, minZoom: 7, maxZoom: 18});
+		map.addLayer(tileLayer);
+		
+		gridLayer = new MyGridLayer();
+		map.addLayer(gridLayer);
 	};
 
 	// 地圖操作狀態同步到介面上
