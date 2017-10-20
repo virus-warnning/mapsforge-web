@@ -35,8 +35,8 @@ CMD ["./gradlew", "start"]
 ```
 
 ```
-sudo docker build -t gdtile:2.0 .
-sudo docker run --name gdtile2 -it gdtile:2.0
-sudo docker start -i gdtile2
+sudo docker build --no-cache -t gdtile:2.x .
+sudo docker run --name gdtile2 -t gdtile:2.x
+sudo docker start gdtile-2.x
 iptables -t nat -A DOCKER -p tcp --dport 80 -j DNAT --to-destination 172.17.0.2:20480
 ```
